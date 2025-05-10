@@ -7,6 +7,12 @@ Usage:
 If you have any questions in mind you can connect to me directly via info@smart-maple.com
 """
 
+def main():
+    """
+    Main function to run the scraper.
+    """
+
 
 if __name__ == "__main__":
-    print("Hello Smart Maple!")
+    # print("Hello Smart Maple!")
+    main()
