@@ -1,0 +1,37 @@
+# ===== REGIONAL SCANS =====
+# Every day at 2 AM - run scraper for California region
+0 2 * * * curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "california", "max_pages": 5}' >> /var/log/cron.log 2>&1
+
+# Every Monday at 3 AM - run scraper for New York region
+0 3 * * 1 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "new_york", "max_pages": 5}' >> /var/log/cron.log 2>&1
+
+# Every Tuesday at 3 AM - run scraper for Texas region
+0 3 * * 2 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "texas", "max_pages": 5}' >> /var/log/cron.log 2>&1
+
+# Every Wednesday at 3 AM - run scraper for Florida region
+0 3 * * 3 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "florida", "max_pages": 5}' >> /var/log/cron.log 2>&1
+
+# Every Thursday at 3 AM - run scraper for Colorado region
+0 3 * * 4 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "colorado", "max_pages": 5}' >> /var/log/cron.log 2>&1
+
+# ===== BROADER US REGIONS =====
+# Every Saturday at 1 AM - run scraper for Western US region
+0 1 * * 6 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "western_us", "max_pages": 8}' >> /var/log/cron.log 2>&1
+
+# Every Saturday at 3 AM - run scraper for Eastern US region
+0 3 * * 6 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "eastern_us", "max_pages": 8}' >> /var/log/cron.log 2>&1
+
+# Every Sunday at 1 AM - run scraper for Midwest US region
+0 1 * * 0 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "midwest_us", "max_pages": 8}' >> /var/log/cron.log 2>&1
+
+# Every Sunday at 3 AM - run scraper for Southern US region
+0 3 * * 0 curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "southern_us", "max_pages": 8}' >> /var/log/cron.log 2>&1
+
+# ===== FULL US SCAN (MONTHLY) =====
+# First day of each month at 12 AM - run full US scan
+0 0 1 * * curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"scrape_full_us": true, "max_pages": 5}' >> /var/log/cron.log 2>&1
+
+# ===== CUSTOM AREAS =====
+# Example: Yellowstone area - Every 15th day of the month at 4 AM
+0 4 15 * * curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"bbox": "-111.2, 44.1, -109.8, 45.1", "max_pages": 3}' >> /var/log/cron.log 2>&1
+

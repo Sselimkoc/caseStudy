@@ -20,7 +20,7 @@ def main():
         # Run the scraper with California region settings 
         total_raw, total_processed, inserted, updated = run_scraper(max_pages=2, bbox=CA_BOUNDS)
         
-        print(f"\n[SUMMARY] Scraper completed successfully")
+        print(f"\nScan completed successfully")
         print(f"  Total campgrounds found: {total_raw}")
         print(f"  Total campgrounds processed: {total_processed}")
         print(f"  Campgrounds inserted: {inserted}")
@@ -28,7 +28,7 @@ def main():
         
         return 0
     except Exception as e:
-        print(f"[ERROR] An error occurred in the main function: {str(e)}")
+        print(f"An error occurred in the main function: {str(e)}")
         return 1
 
 

@@ -37,7 +37,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def create_tables():
     Base.metadata.create_all(bind=engine)
-    print("Database tables created (if they didn't exist).")
+    print("Database tables created (if they didn't exist previously).")
 
 def get_db():
     db = SessionLocal()

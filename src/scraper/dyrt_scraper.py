@@ -17,22 +17,73 @@ DEFAULT_HEADERS = {
         "Origin": "https://thedyrt.com"
     }
 
-# The US bounding box coordinates
+# The US bounding box coordinates (Full country)
 US_BOUNDS = "-125.0, 24.0, -66.0, 49.5"
 
+# Regional US bbox definitions for more precise scraping
 # Western US (Rocky Mountains region)
 WESTERN_US_BOUNDS = "-125.0, 32.0, -105.0, 49.0"
 
 # Eastern US
 EASTERN_US_BOUNDS = "-90.0, 24.0, -66.0, 49.5"
 
+# Midwest US
+MIDWEST_US_BOUNDS = "-104.0, 36.5, -80.0, 49.0"
+
+# Southern US
+SOUTHERN_US_BOUNDS = "-106.0, 25.0, -75.0, 36.5"
+
+# Pacific Northwest
+PACIFIC_NW_BOUNDS = "-125.0, 42.0, -116.5, 49.0"
+
+# Southwest US
+SOUTHWEST_US_BOUNDS = "-120.0, 31.0, -105.0, 42.0"
+
+# Northeast US
+NORTHEAST_US_BOUNDS = "-80.0, 40.0, -66.0, 49.0"
+
+# Southeast US
+SOUTHEAST_US_BOUNDS = "-90.0, 24.0, -75.0, 36.5"
+
+# State-specific bounding boxes
 # New York area
 NY_BOUNDS = "-80.0, 40.0, -71.0, 45.0"
 
 # California area
 CA_BOUNDS = "-124.0, 32.0, -114.0, 42.0"
 
+# Texas area
+TX_BOUNDS = "-106.5, 25.8, -93.5, 36.5"
+
+# Florida area
+FL_BOUNDS = "-87.5, 24.5, -80.0, 31.0"
+
+# Colorado area
+CO_BOUNDS = "-109.0, 37.0, -102.0, 41.0"
+
+# Test area (small portion of Yellowstone)
 TEST_BOUNDS = "-111.0, 44.0, -110.0, 45.0"
+
+# Define all US regions as a list for systematic scraping
+US_REGIONS = [
+    WESTERN_US_BOUNDS,
+    EASTERN_US_BOUNDS,
+    MIDWEST_US_BOUNDS, 
+    SOUTHERN_US_BOUNDS,
+    PACIFIC_NW_BOUNDS,
+    SOUTHWEST_US_BOUNDS,
+    NORTHEAST_US_BOUNDS,
+    SOUTHEAST_US_BOUNDS
+]
+
+# Define popular states as a list
+POPULAR_STATES = [
+    CA_BOUNDS,
+    NY_BOUNDS,
+    TX_BOUNDS,
+    FL_BOUNDS,
+    CO_BOUNDS
+]
 
 def get_campgrounds(bbox, page=1, page_size=5):
     params = {
@@ -95,15 +146,15 @@ def process_campground(campground_data):
         
     except ValidationError as e:
         # Log specific validation errors
-        print(f"Pydantic validation failed for campground {campground_data.get('id')}: {e.errors()}")
+        print(f"Validation error for campground {campground_data.get('id')}: {e.errors()}")
         return None
     except Exception as e:
         # Log other unexpected errors
-        print(f"An unexpected error occurred while processing campground {campground_data.get('id')}: {e}")
+        print(f"Unexpected error while processing campground {campground_data.get('id')}: {e}")
         return None
 
 def save_to_database(campgrounds):
-    print(f"Attempting to save {len(campgrounds)} campgrounds to database")
+    print(f"Saving {len(campgrounds)} campgrounds to database")
     
     db = SessionLocal()
     inserted_count = 0
@@ -143,7 +194,7 @@ def save_to_database(campgrounds):
                     existing.availability_updated_at = campground.availability_updated_at
                     
                     updated_count += 1
-                    print(f"Updated campground: {campground.name} (ID: {campground.id})")
+                    print(f"Updated: {campground.name} (ID: {campground.id})")
                 else:
                     # Create new record
                     db_campground = CampgroundDB(
@@ -172,7 +223,7 @@ def save_to_database(campgrounds):
                     )
                     db.add(db_campground)
                     inserted_count += 1
-                    print(f"Inserted new campground: {campground.name} (ID: {campground.id})")
+                    print(f"Inserted: {campground.name} (ID: {campground.id})")
                 
                 # Try to commit each record individually to avoid losing all on a single error
                 db.commit()
@@ -194,15 +245,13 @@ def save_to_database(campgrounds):
         
     return inserted_count, updated_count, error_count
 
-def main(max_pages=None, bbox=CA_BOUNDS):
-    
+def scrape_region(bbox, max_pages=2):
+    """Scrape a specific bbox region"""
+    print(f"Scanning region with bbox: {bbox}")
     raw_campgrounds = []
     final_campgrounds = []
     page = 1
 
-    # Create database tables if they don't exist
-    create_tables()
-    
     while True:
         print(f"Fetching page {page}...")
         data = get_campgrounds(bbox, page=page, page_size=20)  
@@ -214,35 +263,71 @@ def main(max_pages=None, bbox=CA_BOUNDS):
         raw_campgrounds.extend(data)
         page += 1
 
-        time.sleep(2)
+        time.sleep(2) 
 
         if max_pages and page > max_pages:
             print(f"Reached maximum number of pages ({max_pages}).")
             break
     
-
     for campground_data in raw_campgrounds:
         campground = process_campground(campground_data)
         if campground:
             final_campgrounds.append(campground)
 
-    
     if final_campgrounds:
-        print("\n About to save campgrounds to database...")
+        print("\nSaving campgrounds to database...")
         inserted, updated, errors = save_to_database(final_campgrounds)
         
-        print(f"\n[INFO] Scraping summary:")
+        print(f"\nScan summary for region {bbox}:")
         print(f"  Total campgrounds processed: {len(final_campgrounds)}")
         print(f"  Inserted: {inserted}")
         print(f"  Updated: {updated}")
         print(f"  Errors: {errors}")
         return len(raw_campgrounds), len(final_campgrounds), inserted, updated
     else:
-        print("[WARNING] No campgrounds to save to database!")
+        print(f"No campgrounds to save for region {bbox}!")
 
     return len(raw_campgrounds), 0, 0, 0
 
+def scrape_all_regions(max_pages_per_region=2):
+    """Scrape all US regions systematically"""
+    print(f"Starting systematic scan of all US regions...")
+    total_raw = 0
+    total_processed = 0
+    total_inserted = 0
+    total_updated = 0
+    
+    for i, region_bbox in enumerate(US_REGIONS):
+        print(f"Scanning region {i+1}/{len(US_REGIONS)}: {region_bbox}")
+        raw, processed, inserted, updated = scrape_region(region_bbox, max_pages_per_region)
+        
+        total_raw += raw
+        total_processed += processed
+        total_inserted += inserted
+        total_updated += updated
+        
+        time.sleep(5)  
+    
+    print(f"\nComplete US scan summary:")
+    print(f"  Total campgrounds found: {total_raw}")
+    print(f"  Total campgrounds processed: {total_processed}")
+    print(f"  Campgrounds inserted: {total_inserted}")
+    print(f"  Campgrounds updated: {total_updated}")
+    
+    return total_raw, total_processed, total_inserted, total_updated
+
+def main(max_pages=None, bbox=CA_BOUNDS, scrape_full_us=False):
+    
+    # Create database tables if they don't exist
+    create_tables()
+    
+    if scrape_full_us:
+        # Scan all US regions systematically
+        return scrape_all_regions(max_pages_per_region=max_pages or 2)
+    else:
+        # Scan a single region
+        return scrape_region(bbox, max_pages or 2)
+
 if __name__ == "__main__":
-    # For testing, use the test bounds and limit to 2 pages
     main(max_pages=2, bbox=CA_BOUNDS)
     

@@ -1,0 +1,22 @@
+FROM alpine:3.18
+
+# Install curl and cron
+RUN apk add --no-cache curl bash tzdata
+
+# Set timezone
+RUN cp /usr/share/zoneinfo/UTC /etc/localtime
+RUN echo "UTC" > /etc/timezone
+
+# Create log file
+RUN mkdir -p /var/log
+RUN touch /var/log/cron.log
+
+# Copy crontab file
+COPY crontab /etc/crontabs/root
+
+# Create start script
+COPY start-cron.sh /start-cron.sh
+RUN chmod +x /start-cron.sh
+
+# Run cron in foreground
+CMD ["/start-cron.sh"] 
