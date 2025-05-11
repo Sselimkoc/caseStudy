@@ -1,14 +1,12 @@
-
 version: "3.8"
 
 services:
-
   postgres:
     image: postgres:13
     environment:
-      POSTGRES_DB: case_study  # You can change those
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
 
@@ -19,4 +17,4 @@ services:
     volumes:
       - .:/src
     environment:
-      DB_URL: postgresql://user:password@postgres:5432/case_study
+      DB_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
