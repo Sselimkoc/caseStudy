@@ -10,26 +10,21 @@ echo "Waiting for API service to initialize..."
 sleep 30
 
 # ==========================================================
-# INITIAL TEST REQUESTS (low page counts for quick testing)
+# INITIAL TEST REQUESTS 
 # ==========================================================
 
-# Full US scan with limited pages for testing
-echo "Starting initial US scan test with all regions..."
-curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"scrape_full_us": true, "max_pages": 2}'
+
+# Parallel multi-region scan for faster processing
+echo "Starting parallel multi-region scan with 4 worker threads and 10 page limit for US regions..."
+# Explicitly list the region names as expected by the API
+curl -X POST "http://api:8000/scrape-multiregion" \
+  -H "Content-Type: application/json" \
+  -d '{"max_workers": 4, "max_pages": 10, "regions": ["western_us", "eastern_us", "midwest_us", "southern_us"]}'
 sleep 5
 
-# Also test with broader US bounds for full coverage
-echo "Testing with full US bounds..."
-curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "us", "max_pages": 3}'
-sleep 5
-
-# Test major geographic regions
-echo "Testing Western US region..."
-curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "western_us", "max_pages": 2}'
-sleep 5
-
-echo "Testing Eastern US region..."
-curl -X POST http://api:8000/scrape -H "Content-Type: application/json" -d '{"region": "eastern_us", "max_pages": 2}'
+# Test address updates
+echo "Testing address update functionality with parallel geocoding (8 workers)..."
+curl -X POST http://api:8000/update-addresses -H "Content-Type: application/json" -d '{"limit": 100, "max_workers": 8}'
 sleep 5
 
 # ==========================================================

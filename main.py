@@ -17,9 +17,9 @@ def main():
         # Initialize database tables
         create_tables()
         
-        # Run full US scraper to scan all regions systematically
-        print("Starting full US scan to collect campgrounds across the entire United States...")
-        total_raw, total_processed, inserted, updated = run_scraper(max_pages=3, scrape_full_us=True)
+        # Run full US scan with 10 page limit
+        print("Starting US scan to collect campgrounds (limited to 10 pages)...")
+        total_raw, total_processed, inserted, updated = run_scraper(max_pages=10)
         
         print(f"\nScan completed successfully")
         print(f"  Total campgrounds found: {total_raw}")

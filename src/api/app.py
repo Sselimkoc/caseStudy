@@ -1,16 +1,17 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 import logging
 from typing import Optional, List
+import concurrent.futures
+import time
 
 from src.db.database import get_db, CampgroundDB
 from src.scraper.dyrt_scraper import (
-    CA_BOUNDS, US_BOUNDS, NY_BOUNDS, WESTERN_US_BOUNDS, EASTERN_US_BOUNDS,
+    US_BOUNDS, WESTERN_US_BOUNDS, EASTERN_US_BOUNDS,
     MIDWEST_US_BOUNDS, SOUTHERN_US_BOUNDS, PACIFIC_NW_BOUNDS, SOUTHWEST_US_BOUNDS,
-    NORTHEAST_US_BOUNDS, SOUTHEAST_US_BOUNDS, TX_BOUNDS, FL_BOUNDS, CO_BOUNDS,
-    US_REGIONS,
+    NORTHEAST_US_BOUNDS, SOUTHEAST_US_BOUNDS, FOUR_MAIN_US_REGIONS
 )
-from src.scraper.dyrt_scraper import main as run_scraper
+from src.scraper.dyrt_scraper import main as run_scraper, scrape_region, parallel_scrape_regions
 from src.geocoding.nominatim import get_address_from_coordinates, batch_geocode
 
 # Configure logging - Adjust format to remove INFO/WARNING prefixes
@@ -29,9 +30,7 @@ app = FastAPI(
 
 # Map of predefined bounding boxes
 BBOX_MAP = {
-    "california": CA_BOUNDS,
     "us": US_BOUNDS,
-    "new_york": NY_BOUNDS,
     "western_us": WESTERN_US_BOUNDS,
     "eastern_us": EASTERN_US_BOUNDS,
     "midwest_us": MIDWEST_US_BOUNDS,
@@ -39,28 +38,23 @@ BBOX_MAP = {
     "pacific_northwest": PACIFIC_NW_BOUNDS,
     "southwest_us": SOUTHWEST_US_BOUNDS,
     "northeast_us": NORTHEAST_US_BOUNDS,
-    "southeast_us": SOUTHEAST_US_BOUNDS,
-    "texas": TX_BOUNDS,
-    "florida": FL_BOUNDS,
-    "colorado": CO_BOUNDS
+    "southeast_us": SOUTHEAST_US_BOUNDS
 }
 
 # Background task for scraping
-def scrape_campgrounds_task(bbox: str, max_pages: int = 2, scrape_full_us: bool = False):
+def scrape_campgrounds_task(bbox= US_BOUNDS, max_pages = None):
     try:
-        if scrape_full_us:
-            logger.info(f"Starting: Scanning all US regions (page limit={max_pages})")
-            total_raw, total_processed, inserted, updated = run_scraper(max_pages=max_pages, scrape_full_us=True)
-            logger.info(f"Completed: Found {total_raw} campgrounds, processed {total_processed}, inserted {inserted}, updated {updated}")
-        else:
-            logger.info(f"Starting: Scanning region {bbox}, (page limit={max_pages})")
-            total_raw, total_processed, inserted, updated = run_scraper(max_pages=max_pages, bbox=bbox)
-            logger.info(f"Completed: Found {total_raw} campgrounds, processed {total_processed}, inserted {inserted}, updated {updated}")
+        region_name = "Full US" if bbox == US_BOUNDS else f"Region with bbox: {bbox}"
+        page_limit = f"with page limit: {max_pages}" if max_pages is not None else "without page limit (auto-collection)"
+        
+        logger.info(f"Starting: Scanning {region_name} {page_limit}")
+        total_raw, total_processed, inserted, updated = run_scraper(max_pages=max_pages, bbox=bbox)
+        logger.info(f"Completed: Found {total_raw} campgrounds, processed {total_processed}, inserted {inserted}, updated {updated}")
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
 
 # Background task for updating addresses
-def update_addresses_task(limit: int = 100):
+def update_addresses_task(limit = 100, max_workers = 8):
     db = get_db()
     try:
         # Get campgrounds that don't have an address but have coordinates
@@ -71,32 +65,39 @@ def update_addresses_task(limit: int = 100):
         ).limit(limit)
         
         campgrounds = query.all()
-        logger.info(f"Found {len(campgrounds)} campgrounds without address. Starting geocoding...")
+        logger.info(f"Found {len(campgrounds)} campgrounds without address. Starting parallel geocoding with {max_workers} workers...")
         
         coords_list = [(c.latitude, c.longitude) for c in campgrounds]
         address_count = 0
         
-        # Process in smaller batches to respect API rate limits
-        for i in range(0, len(campgrounds), 10):
-            batch = campgrounds[i:i+10]
-            batch_coords = coords_list[i:i+10]
-            
-            # Get addresses for this batch
-            addresses = batch_geocode(batch_coords)
-            
-            # Update campgrounds with new addresses
-            for j, campground in enumerate(batch):
-                coord_key = batch_coords[j]
-                if coord_key in addresses and addresses[coord_key]:
-                    campground.address = addresses[coord_key]
-                    address_count += 1
-            
-            # Commit after each batch
-            db.commit()
-            logger.info(f"Processed batch {i//10 + 1}, updated {address_count} addresses so far")
+        # Process all coordinates in a single batch using parallel geocoding
+        start_time = time.time()
+        addresses = batch_geocode(coords_list, max_workers=max_workers)
+        end_time = time.time()
         
-        logger.info(f"Address update completed: {address_count} addresses added")
-        return {"success": True, "addresses_updated": address_count}
+        # Update campgrounds with new addresses
+        for i, campground in enumerate(campgrounds):
+            coord_key = coords_list[i]
+            if coord_key in addresses and addresses[coord_key]:
+                campground.address = addresses[coord_key]
+                address_count += 1
+        
+        # Commit all updates at once
+        db.commit()
+        
+        # Calculate performance stats
+        duration = end_time - start_time
+        processing_speed = len(coords_list) / duration if duration > 0 else 0
+        
+        logger.info(f"Address update completed: {address_count} addresses added in {duration:.1f} seconds")
+        logger.info(f"Geocoding performance: {processing_speed:.2f} coordinates/second with {max_workers} workers")
+        
+        return {
+            "success": True, 
+            "addresses_updated": address_count,
+            "processing_time_seconds": duration,
+            "processing_speed": f"{processing_speed:.2f} coordinates/second"
+        }
         
     except Exception as e:
         logger.error(f"Error updating addresses: {str(e)}")
@@ -105,6 +106,26 @@ def update_addresses_task(limit: int = 100):
     finally:
         db.close()
 
+# Background task for parallel multi-region scraping
+def scrape_multiregion_task(regions=FOUR_MAIN_US_REGIONS, max_pages=None, max_workers=4):
+    try:
+        logger.info(f"Starting parallel scan across {len(regions)} regions with {max_workers} workers")
+        
+        # Call the parallel scraper function
+        total_raw, total_processed, total_inserted, total_updated = parallel_scrape_regions(
+            regions=regions,
+            max_pages=max_pages,
+            max_workers=max_workers
+        )
+        
+        logger.info(f"Completed multiregion scan: {total_raw} found, {total_processed} processed, "
+                   f"{total_inserted} inserted, {total_updated} updated")
+        
+        return total_raw, total_processed, total_inserted, total_updated
+    except Exception as e:
+        logger.error(f"Error in multiregion scan: {str(e)}")
+        return 0, 0, 0, 0
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Campground Scraper API"}
@@ -112,44 +133,45 @@ def read_root():
 @app.post("/scrape")
 async def scrape_campgrounds(
     background_tasks: BackgroundTasks,
-    max_pages: int = 2,
-    region: Optional[str] = "california",
-    bbox: Optional[str] = None,
-    scrape_full_us: bool = False
+    max_pages: Optional[int] = None,
+    region: Optional[str] = None,
+    bbox: Optional[str] = None
 ):
     try:
-        if scrape_full_us:
-            # Start a full US scrape task
-            background_tasks.add_task(scrape_campgrounds_task, "", max_pages, scrape_full_us=True)
-            return {
-                "message": "Full US scan started - this will take some time",
-                "status": "processing",
-                "max_pages_per_region": max_pages,
-                "regions": len(US_REGIONS)
-            }
-        
-        # If bbox is provided directly, use it
-        # Otherwise, lookup from predefined regions
+        # Determine the bounding box to use
         bounding_box = bbox
-        if not bounding_box:
+        
+        # If region is specified but not bbox, convert region to bbox
+        if not bounding_box and region:
             if region in BBOX_MAP:
                 bounding_box = BBOX_MAP[region]
+            elif region.lower() == "us":
+                bounding_box = US_BOUNDS
             else:
                 return {
                     "status": "error",
                     "message": f"Invalid region. Please choose from: {', '.join(BBOX_MAP.keys())} or provide a custom bbox parameter"
                 }
         
+        # If no region or bbox specified, default to US_BOUNDS
+        if not bounding_box:
+            bounding_box = US_BOUNDS
+        
         # Start the scraper in the background
         background_tasks.add_task(scrape_campgrounds_task, bounding_box, max_pages)
         
-        response_message = f"Scan started: bbox={bounding_box}"
-        if not bbox and region in BBOX_MAP:
+        # Prepare the response message
+        if bounding_box == US_BOUNDS:
+            response_message = "Full US scan started"
+        elif region in BBOX_MAP:
             response_message = f"Scan started: region={region}"
+        else:
+            response_message = f"Scan started: bbox={bounding_box}"
             
         return {
             "message": response_message,
             "status": "processing",
+            "auto_collection": True if max_pages is None else False,
             "max_pages": max_pages,
             "bbox": bounding_box
         }
@@ -160,16 +182,21 @@ async def scrape_campgrounds(
 @app.post("/update-addresses")
 async def update_addresses(
     background_tasks: BackgroundTasks,
-    limit: int = 100
+    limit: int = 100,
+    max_workers: int = 8
 ):
     """
     Update missing addresses for campgrounds that have coordinates but no address.
-    This endpoint will run geocoding in the background to fill in the address field.
+    This endpoint will run parallel geocoding in the background to fill in the address field.
+    
+    Args:
+        limit: Maximum number of campgrounds to process
+        max_workers: Number of parallel workers for geocoding (default: 8)
     """
     try:
-        background_tasks.add_task(update_addresses_task, limit)
+        background_tasks.add_task(update_addresses_task, limit, max_workers)
         return {
-            "message": f"Address update task started for up to {limit} campgrounds",
+            "message": f"Address update task started for up to {limit} campgrounds using {max_workers} parallel workers",
             "status": "processing"
         }
     except Exception as e:
@@ -310,4 +337,61 @@ def get_available_regions():
     return {
         "regions": list(BBOX_MAP.keys()),
         "full_us_available": True
-    } 
+    }
+
+@app.post("/scrape-multiregion")
+async def scrape_campgrounds_multiregion(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    max_pages: Optional[int] = None,
+    max_workers: int = 4
+):
+    try:
+        # Parse JSON body to get regions
+        data = await request.json()
+        regions = data.get("regions")
+        
+        # Override query params if provided in body
+        if "max_pages" in data:
+            max_pages = data["max_pages"]
+        if "max_workers" in data:
+            max_workers = data["max_workers"]
+        
+        # Validate and prepare regions to scan
+        bboxes_to_scan = []
+        
+        # If specific regions are requested
+        if regions:
+            for region in regions:
+                if region in BBOX_MAP:
+                    bboxes_to_scan.append(BBOX_MAP[region])
+                else:
+                    return {
+                        "status": "error", 
+                        "message": f"Invalid region '{region}'. Please choose from: {', '.join(BBOX_MAP.keys())}"
+                    }
+        else:
+            # Default to predefined US regions
+            bboxes_to_scan = FOUR_MAIN_US_REGIONS
+        
+        # Adjust worker count if needed
+        actual_workers = min(max_workers, len(bboxes_to_scan))
+        
+        # Start the multiregion scraper in the background
+        background_tasks.add_task(
+            scrape_multiregion_task, 
+            regions=bboxes_to_scan, 
+            max_pages=max_pages, 
+            max_workers=actual_workers
+        )
+            
+        return {
+            "message": f"Parallel scan started across {len(bboxes_to_scan)} regions with {actual_workers} worker threads",
+            "status": "processing",
+            "regions": len(bboxes_to_scan),
+            "threads": actual_workers,
+            "max_pages_per_region": max_pages
+        }
+    except Exception as e:
+        logger.error(f"Error starting multiregion scan: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) 

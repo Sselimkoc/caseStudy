@@ -2,6 +2,10 @@ from sqlalchemy import create_engine, Column, String, Float, Boolean, DateTime, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
+import logging
+
+# Get logger
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DB_URL")
 Base = declarative_base()
@@ -37,8 +41,12 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def create_tables():
-    Base.metadata.create_all(bind=engine)
-    print("Database tables created (if they didn't exist previously).")
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables created (if they didn't exist previously).")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}")
+        raise
 
 def get_db():
     db = SessionLocal()
