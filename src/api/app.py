@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from src.db.database import get_db, CampgroundDB
 from src.scraper.dyrt_scraper import (
@@ -11,6 +11,7 @@ from src.scraper.dyrt_scraper import (
     US_REGIONS,
 )
 from src.scraper.dyrt_scraper import main as run_scraper
+from src.geocoding.nominatim import get_address_from_coordinates, batch_geocode
 
 # Configure logging - Adjust format to remove INFO/WARNING prefixes
 logging.basicConfig(
@@ -57,6 +58,52 @@ def scrape_campgrounds_task(bbox: str, max_pages: int = 2, scrape_full_us: bool 
             logger.info(f"Completed: Found {total_raw} campgrounds, processed {total_processed}, inserted {inserted}, updated {updated}")
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
+
+# Background task for updating addresses
+def update_addresses_task(limit: int = 100):
+    db = get_db()
+    try:
+        # Get campgrounds that don't have an address but have coordinates
+        query = db.query(CampgroundDB).filter(
+            CampgroundDB.address == None,  # No address
+            CampgroundDB.latitude != None,  # Has latitude
+            CampgroundDB.longitude != None  # Has longitude
+        ).limit(limit)
+        
+        campgrounds = query.all()
+        logger.info(f"Found {len(campgrounds)} campgrounds without address. Starting geocoding...")
+        
+        coords_list = [(c.latitude, c.longitude) for c in campgrounds]
+        address_count = 0
+        
+        # Process in smaller batches to respect API rate limits
+        for i in range(0, len(campgrounds), 10):
+            batch = campgrounds[i:i+10]
+            batch_coords = coords_list[i:i+10]
+            
+            # Get addresses for this batch
+            addresses = batch_geocode(batch_coords)
+            
+            # Update campgrounds with new addresses
+            for j, campground in enumerate(batch):
+                coord_key = batch_coords[j]
+                if coord_key in addresses and addresses[coord_key]:
+                    campground.address = addresses[coord_key]
+                    address_count += 1
+            
+            # Commit after each batch
+            db.commit()
+            logger.info(f"Processed batch {i//10 + 1}, updated {address_count} addresses so far")
+        
+        logger.info(f"Address update completed: {address_count} addresses added")
+        return {"success": True, "addresses_updated": address_count}
+        
+    except Exception as e:
+        logger.error(f"Error updating addresses: {str(e)}")
+        db.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        db.close()
 
 @app.get("/")
 def read_root():
@@ -108,6 +155,25 @@ async def scrape_campgrounds(
         }
     except Exception as e:
         logger.error(f"Error starting scan: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/update-addresses")
+async def update_addresses(
+    background_tasks: BackgroundTasks,
+    limit: int = 100
+):
+    """
+    Update missing addresses for campgrounds that have coordinates but no address.
+    This endpoint will run geocoding in the background to fill in the address field.
+    """
+    try:
+        background_tasks.add_task(update_addresses_task, limit)
+        return {
+            "message": f"Address update task started for up to {limit} campgrounds",
+            "status": "processing"
+        }
+    except Exception as e:
+        logger.error(f"Error starting address update: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/campgrounds")
@@ -164,7 +230,8 @@ def get_campground(campground_id: str, db: Session = Depends(get_db)):
             "price_low": campground.price_low,
             "price_high": campground.price_high,
             "photo_url": campground.photo_url,
-            "operator": campground.operator
+            "operator": campground.operator,
+            "address": campground.address
         }
         
         return result
@@ -172,6 +239,69 @@ def get_campground(campground_id: str, db: Session = Depends(get_db)):
         raise
     except Exception as e:
         logger.error(f"Error retrieving campground {campground_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/campgrounds/{campground_id}/detailed")
+def get_campground_detailed(campground_id: str, db: Session = Depends(get_db)):
+    """Get detailed information about a specific campground, including its address"""
+    try:
+        campground = db.query(CampgroundDB).filter(CampgroundDB.id == campground_id).first()
+        
+        if not campground:
+            raise HTTPException(status_code=404, detail="Campground not found")
+            
+        # Get address from geocoding if not already present
+        address = campground.address
+        if not address and campground.latitude and campground.longitude:
+            try:
+                address = get_address_from_coordinates(campground.latitude, campground.longitude)
+                if address:
+                    # Save the address to the database for future queries
+                    campground.address = address
+                    db.commit()
+            except Exception as e:
+                logger.error(f"Error geocoding address: {str(e)}")
+        
+        # Convert to dictionary with all fields
+        result = {
+            "id": campground.id,
+            "name": campground.name,
+            "type": campground.type,
+            "links_self": campground.links_self,
+            "region_name": campground.region_name,
+            "administrative_area": campground.administrative_area,
+            "nearest_city_name": campground.nearest_city_name,
+            "accommodation_type_names": campground.accommodation_type_names,
+            "bookable": campground.bookable,
+            "camper_types": campground.camper_types,
+            "operator": campground.operator,
+            "location": {
+                "latitude": campground.latitude,
+                "longitude": campground.longitude,
+                "address": address
+            },
+            "photos": {
+                "main_photo": campground.photo_url,
+                "all_photos": campground.photo_urls,
+                "count": campground.photos_count
+            },
+            "ratings": {
+                "rating": campground.rating,
+                "reviews_count": campground.reviews_count
+            },
+            "pricing": {
+                "price_low": campground.price_low,
+                "price_high": campground.price_high
+            },
+            "availability_updated_at": campground.availability_updated_at,
+            "slug": campground.slug
+        }
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving detailed campground {campground_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/regions")

@@ -31,6 +31,7 @@ class CampgroundDB(Base):
     price_low = Column(Float, nullable=True)
     price_high = Column(Float, nullable=True)
     availability_updated_at = Column(DateTime, nullable=True)
+    address = Column(String, nullable=True)  # Added for geocoding reverse lookup
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

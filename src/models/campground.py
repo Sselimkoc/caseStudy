@@ -37,4 +37,5 @@ class Campground(BaseModel):
     availability_updated_at: Optional[datetime] = Field(
         None, alias="availability-updated-at"
     )
+    address: Optional[str] = None  # Added for geocoding reverse lookup
     # address: Optinal[str] = "" For bonus point

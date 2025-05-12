@@ -4,6 +4,7 @@ from src.models.campground import Campground
 from src.db.database import SessionLocal, CampgroundDB, create_tables
 from sqlalchemy.exc import SQLAlchemyError
 import time
+from src.geocoding.nominatim import get_address_from_coordinates
 
 
 
@@ -76,15 +77,6 @@ US_REGIONS = [
     SOUTHEAST_US_BOUNDS
 ]
 
-# Define popular states as a list
-POPULAR_STATES = [
-    CA_BOUNDS,
-    NY_BOUNDS,
-    TX_BOUNDS,
-    FL_BOUNDS,
-    CO_BOUNDS
-]
-
 def get_campgrounds(bbox, page=1, page_size=5):
     params = {
         "filter[search][drive_time]": "any",
@@ -112,6 +104,20 @@ def process_campground(campground_data):
         # Extract the attributes from the API response
         attrs = campground_data.get("attributes", {})
         print(f"Processing campground {campground_data.get('id')}: {attrs}")
+        
+        # Get latitude and longitude
+        latitude = attrs.get("latitude")
+        longitude = attrs.get("longitude")
+        
+        # Get address using reverse geocoding
+        address = None
+        if latitude is not None and longitude is not None:
+            address = get_address_from_coordinates(latitude, longitude)
+            if address:
+                print(f"Found address: {address}")
+            else:
+                print(f"Could not determine address for coordinates ({latitude}, {longitude})")
+        
         # Create the data structure expected by the Pydantic model
         campground_dict = {
             "id": campground_data.get("id"),
@@ -120,8 +126,8 @@ def process_campground(campground_data):
                 "self": campground_data.get("links", {}).get("self", "https://thedyrt.com")
             },
             "name": attrs.get("name", ""),
-            "latitude": attrs.get("latitude"),
-            "longitude": attrs.get("longitude"),
+            "latitude": latitude,
+            "longitude": longitude,
             "region-name": attrs.get("region-name", ""),
             "administrative-area": attrs.get("administrative-area"),
             "nearest-city-name": attrs.get("nearest-city-name"),
@@ -137,7 +143,8 @@ def process_campground(campground_data):
             "slug": attrs.get("slug"),
             "price-low": attrs.get("price-low"),
             "price-high": attrs.get("price-high"),
-            "availability-updated-at": attrs.get("availability-updated-at")
+            "availability-updated-at": attrs.get("availability-updated-at"),
+            "address": address
         }
         
         # Create and validate a Campground model instance
@@ -192,6 +199,7 @@ def save_to_database(campgrounds):
                     existing.price_low = campground.price_low
                     existing.price_high = campground.price_high
                     existing.availability_updated_at = campground.availability_updated_at
+                    existing.address = campground.address
                     
                     updated_count += 1
                     print(f"Updated: {campground.name} (ID: {campground.id})")
@@ -219,7 +227,8 @@ def save_to_database(campgrounds):
                         slug=campground.slug,
                         price_low=campground.price_low,
                         price_high=campground.price_high,
-                        availability_updated_at=campground.availability_updated_at
+                        availability_updated_at=campground.availability_updated_at,
+                        address=campground.address
                     )
                     db.add(db_campground)
                     inserted_count += 1
@@ -316,7 +325,7 @@ def scrape_all_regions(max_pages_per_region=2):
     
     return total_raw, total_processed, total_inserted, total_updated
 
-def main(max_pages=None, bbox=CA_BOUNDS, scrape_full_us=False):
+def main(max_pages=None, bbox=US_BOUNDS, scrape_full_us=False):
     
     # Create database tables if they don't exist
     create_tables()
@@ -329,5 +338,5 @@ def main(max_pages=None, bbox=CA_BOUNDS, scrape_full_us=False):
         return scrape_region(bbox, max_pages or 2)
 
 if __name__ == "__main__":
-    main(max_pages=2, bbox=CA_BOUNDS)
+    main(max_pages=2, scrape_full_us=True)
     

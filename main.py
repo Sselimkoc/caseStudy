@@ -7,7 +7,7 @@ Usage:
 If you have any questions in mind you can connect to me directly via info@smart-maple.com
 """
 from src.db.database import create_tables
-from src.scraper.dyrt_scraper import main as run_scraper, CA_BOUNDS
+from src.scraper.dyrt_scraper import main as run_scraper
 
 def main():
     """
@@ -17,8 +17,9 @@ def main():
         # Initialize database tables
         create_tables()
         
-        # Run the scraper with California region settings 
-        total_raw, total_processed, inserted, updated = run_scraper(max_pages=2, bbox=CA_BOUNDS)
+        # Run full US scraper to scan all regions systematically
+        print("Starting full US scan to collect campgrounds across the entire United States...")
+        total_raw, total_processed, inserted, updated = run_scraper(max_pages=3, scrape_full_us=True)
         
         print(f"\nScan completed successfully")
         print(f"  Total campgrounds found: {total_raw}")
